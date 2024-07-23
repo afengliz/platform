@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"sync"
+
+	"github.com/gorilla/websocket"
 )
 
 // PluginConnection represents a plugin connection
@@ -78,6 +80,69 @@ func (ps *ProxyServer) HandleHTTPProxy(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "No plugin available", http.StatusServiceUnavailable)
 }
 
+// HandleWebSocketProxy handles WebSocket proxy requests
+func (ps *ProxyServer) HandleWebSocketProxy(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	ps.pluginsMutex.Lock()
+	defer ps.pluginsMutex.Unlock()
+
+	// For simplicity, we'll just use the first available plugin
+	for pluginID, pluginConn := range ps.plugins {
+		log.Printf("Forwarding WebSocket connection to plugin: %s", pluginID)
+
+		// Forward the WebSocket connection to the plugin
+		go func() {
+			defer conn.Close()
+			// defer pluginConn.Conn.Close()
+
+			// Copy data from WebSocket to plugin connection
+			go func() {
+				for {
+					_, msg, err := conn.ReadMessage()
+					if err != nil {
+						log.Printf("Error reading WebSocket message: %v", err)
+						return
+					}
+					_, err = pluginConn.Conn.Write(msg)
+					if err != nil {
+						log.Printf("Error writing to plugin connection: %v", err)
+						return
+					}
+				}
+			}()
+
+			// Copy data from plugin connection to WebSocket
+			buf := make([]byte, 1024)
+			for {
+				n, err := pluginConn.Conn.Read(buf)
+				if err != nil {
+					log.Printf("Error reading from plugin connection: %v", err)
+					return
+				}
+				err = conn.WriteMessage(websocket.BinaryMessage, buf[:n])
+				if err != nil {
+					log.Printf("Error writing WebSocket message: %v", err)
+					return
+				}
+			}
+		}()
+		return
+	}
+
+	http.Error(w, "No plugin available", http.StatusServiceUnavailable)
+}
+
 func main() {
 	proxyServer := NewProxyServer()
 
@@ -103,11 +168,14 @@ func main() {
 	}()
 
 	// Listen for HTTP proxy requests
-	http.HandleFunc("/", proxyServer.HandleHTTPProxy)
+	http.HandleFunc("/http", proxyServer.HandleHTTPProxy)
 
-	log.Println("Listening for HTTP proxy requests on :8080")
+	// Listen for WebSocket proxy requests
+	http.HandleFunc("/ws", proxyServer.HandleWebSocketProxy)
+
+	log.Println("Listening for proxy requests on :8080")
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
-		log.Fatalf("Error starting HTTP proxy server: %v", err)
+		log.Fatalf("Error starting proxy server: %v", err)
 	}
 }
