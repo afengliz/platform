@@ -71,9 +71,10 @@ func (m *Manager) Report(agent *Agent, items map[string]PluginReportItem) {
 				m.pluginRuntimes[item.instanceID].runtimeStatus = "running"
 				m.pluginRuntimes[item.instanceID].lastTimeStamp = time.Now().Second()
 			} else { // 不同 agent
-				// todo 挪动到最后一步 (直接调用，从原来的 agent 中删除)
+				// 不合理的数据，直接调用agent的删除pod接口，
+				// todo 挪动到最后一步,可以异步
 			}
-		} else { // 不存在
+		} else { // 不存在，用于处理刚刚初始化的情况
 			m.pluginRuntimes[item.instanceID] = &PluginPod{
 				instanceID: item.instanceID,
 				version:    item.version,
@@ -151,10 +152,7 @@ func (m *Manager) Monitor2() {
 		m.lock.RLock()
 		// 拷贝出一份 超过一定时间没有心跳的runtime
 		m.lock.RUnlock()
+		// 获取当前业务状态为启用的插件列表，与当前运行时列表做对比
 		// 少的部分push add task，多的部分push stop task
 	}
 }
-
-// 标记插件运行时为running
-
-// 标记插件运行时为killed
