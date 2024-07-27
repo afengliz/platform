@@ -156,3 +156,15 @@ func (m *Manager) Monitor2() {
 		// 少的部分push add task，多的部分push stop task
 	}
 }
+
+// 监控Agent的心跳长时间无上报的，将Agent上的运行时在内存里全部删除
+func (m *Manager) Monitor3() {
+	for {
+		m.lock.RLock()
+		// 拷贝出一份agent列表
+		m.lock.RUnlock()
+		// 判断是否有Agent的心跳长时间无上报的，有的话再上写锁
+		// 将分配在具体Agent上的运行时在内存里删除
+		// 释放写锁
+	}
+}
