@@ -2,20 +2,17 @@ package manager
 
 import (
 	"sync"
-	"time"
 )
 
-type PluginPod struct {
-	resourceVersion int
-	runtimeStatus   string
-	instanceID      string
-	version         string
-	agentID         string
-	agentIP         string
-	lastTimeStamp   int
+type PluginRuntime struct {
+	status     string
+	instanceID string
+	version    string
+	agentID    string
+	agentIP    string
 }
 
-type PluginMetric struct {
+type PluginRuntimeMetric struct {
 	instanceID string
 	pid        string
 	cpu        float64
@@ -23,25 +20,19 @@ type PluginMetric struct {
 	cpuTime    int
 	memoryTime int
 }
-type PluginReportItem struct {
-	instanceID      string
-	version         string
-	resourceVersion int
-	PluginMetric
-}
 
 type Agent struct {
-	agentID        string
-	agentIP        string
-	cpu            float64
-	memory         float64
-	usageCpu       float64
-	usageMemory    float64
-	runningPlugins []string
-	lastTimestamp  int
+	agentID string
+	agentIP string
 }
 
-// todo 提供agent的copy方法
+type AgentMetric struct {
+	cpu           float64
+	memory        float64
+	usageCpu      float64
+	usageMemory   float64
+	lastTimestamp int
+}
 
 type Task struct {
 	InstanceID string
@@ -51,7 +42,6 @@ type Task struct {
 }
 
 type Manager struct {
-	lock sync.RWMutex // 读写锁,todo 会不会有死锁问题
 	// 调度任务队列
 	taskQueue chan *Task
 	// agent队列锁
@@ -60,12 +50,14 @@ type Manager struct {
 	agentQueue map[string]chan *Task
 	// 通过注册/注销 + 心跳保活（超过驱逐）
 	agents sync.Map // map[string]*Agent // key agentID
+	// agent metric
+	agentMetrics sync.Map // map[string]*AgentMetric // key agentID
 	// agent 预调度的Plugin数量
 	agentPreSchedulePluginsCount sync.Map // map[string]int // key agentID,val plugin count
 	// 插件运行时
-	pluginRuntimes sync.Map // map[string]*PluginPod // key instanceID + version
+	pluginRuntimes sync.Map // map[string]*PluginRuntime // key instanceID + version
 	// 插件运行时metric
-	pluginMetrics sync.Map //map[string]*PluginMetric // key instanceID + version
+	pluginRuntimeMetric sync.Map //map[string]*PluginRuntimeMetric // key instanceID + version
 }
 
 // push 任务
@@ -73,62 +65,34 @@ func (m *Manager) PushTask(task *Task) {
 	m.taskQueue <- task
 }
 
-func (m *Manager) Report(agent Agent, items map[string]PluginReportItem) {
-	// agent 更新
-	if old, ok := m.agents.LoadOrStore(agent.agentID, agent); ok {
-		m.agents.CompareAndSwap(agent.agentID, old, agent)
+func (m *Manager) ReportRunningPlugins(agentID string, runningPlugins map[string]struct{}) {
+	if _, ok := m.agents.Load(agentID); !ok { // 不存在，直接返回
+		return
 	}
+	// runtime status 更新
 
-	for _, item := range items { // 多的部分
-		// 更新 plugin runtime
-		if val, ok := m.pluginRuntimes.LoadOrStore(item.instanceID, PluginPod{
-			instanceID: item.instanceID,
-			version:    item.version,
-			agentID:    agent.agentID,
-			agentIP:    agent.agentIP,
-		}); ok { // 存在
-			old := val.(PluginPod)
-			if old.agentID == agent.agentID { // 同一个 agent
-				old.runtimeStatus = "running"
-				old.lastTimeStamp = time.Now().Second()
-			} else { // 不同 agent
-				//  todo 不合理的数据，直接调用agent的删除pod接口，可以异步
-			}
-		}
-		// 更新metric
-		if val, ok := m.pluginMetrics.LoadOrStore(item.instanceID, PluginMetric{
-			instanceID: item.instanceID,
-			pid:        item.instanceID,
-			cpu:        item.cpu,
-			memory:     item.memory,
-			cpuTime:    time.Now().Second(),
-		}); ok {
-			oldO := val.(PluginMetric)
-			newO := oldO
-			if oldO.cpu < item.cpu {
-				newO.cpuTime = item.cpuTime
-				newO.cpu = item.cpu
-			}
-			if oldO.memory < item.memory {
-				newO.memoryTime = item.memoryTime
-				newO.memory = item.memory
-			}
-			m.pluginMetrics.CompareAndSwap(item.instanceID, val, newO)
-		}
+	// 这部分，放agent自己处理可能更好些
+	// 比runtime多的，push stop task
+	// 比runtime少的，，push start task
+}
+func (m *Manager) ReportMetric(agentID string, agentMetric AgentMetric, runningPluginMetrics map[string]PluginRuntimeMetric) {
+	if _, ok := m.agents.Load(agentID); !ok { // 不存在，直接返回
+		return
 	}
-	// todo 貌似不需要了
-	m.pluginRuntimes.Range(func(key, value any) bool {
-		aPod := value.(PluginPod)
-		if aPod.agentID == agent.agentID {
-			if _, ok := items[aPod.instanceID]; !ok {
-				// todo 少的部分，将插件运行时状态，标记为killed
-			}
-		}
-		return true
-	})
+	// agent metric 更新
 
+	// runtime metric 更新
 }
 
+// 注册agent
+func (m *Manager) RegisterAgent(agentID string, agentIP string) {
+	m.agents.Store(agentID, Agent{
+		agentID: agentID,
+		agentIP: agentIP,
+	})
+}
+
+// 注销agent
 func (m *Manager) UnRegisterAgent(agentID string) {
 	m.agents.Delete(agentID)
 }
@@ -139,66 +103,59 @@ func (m *Manager) Schedule() {
 		select {
 		case task := <-m.taskQueue:
 			if task.Action == "start" { // 启动
-				if val, ok := m.pluginRuntimes.LoadOrStore(task.InstanceID, PluginPod{
-					instanceID:    task.InstanceID,
-					version:       task.Version,
-					runtimeStatus: "pending",
+				if val, ok := m.pluginRuntimes.LoadOrStore(task.InstanceID, PluginRuntime{
+					instanceID: task.InstanceID,
+					version:    task.Version,
+					status:     "pending",
 				}); ok {
-					pod := val.(PluginPod)
-					if pod.runtimeStatus == "running" {
+					pod := val.(PluginRuntime)
+					if pod.status == "running" {
 						continue
 					}
-					if pod.runtimeStatus == "pending" {
+					if pod.status == "pending" {
 						continue
 					}
-					if pod.runtimeStatus == "pushed" {
+					if pod.status == "pushed" {
 						continue
 					}
 				}
 				// 计算最合适的 agent（哪个插件少，就漂哪个）
 
-				// agent plugin 数量 + 1
-
 				// push to agent
-
+				// pod.agentID = agentID
+				// pod.agentIP = agentIP
+				// pod.status = "pushed"
+				// m.pluginRuntimes.CompareAndSwap(task.InstanceID, val, pod)
 				// 失败推送至队列尾部
 			} else { //停止
 				m.pluginRuntimes.Delete(task.InstanceID)
+
 				// push to agent
 			}
 		}
 	}
 }
 
-// 监控running状态的插件运行时的lasttimestamp，超过一定时间没有心跳，就认为插件挂了，直接给push 一个停止任务
+// 更新运行时状态
+func (m *Manager) UpdateRuntimeStatus(instanceID string, status string) {
+	if val, ok := m.pluginRuntimes.Load(instanceID); ok {
+		pod := val.(PluginRuntime)
+		pod.status = status
+		m.pluginRuntimes.CompareAndSwap(instanceID, val, pod)
+	}
+}
+
+// 监控runtime metric 的插件运行时的lasttimestamp，超过一定时间没有心跳，就认为插件挂了，直接删除内存runtime
 func (m *Manager) Monitor1() {
 	for {
-		m.lock.RLock()
-		// 拷贝出一份 超过一定时间没有心跳的runtime
-		m.lock.RUnlock()
-		// stop‘s task push to  taskQueue
+		// 直接删除内存runtime
 	}
 }
 
 // 监控当前运行时与业务状态的一致性
 func (m *Manager) Monitor2() {
 	for {
-		m.lock.RLock()
-		// 拷贝出一份 超过一定时间没有心跳的runtime
-		m.lock.RUnlock()
 		// 获取当前业务状态为启用的插件列表，与当前运行时列表做对比
 		// 少的部分push add task，多的部分push stop task
-	}
-}
-
-// 监控Agent的心跳长时间无上报的，将Agent上的运行时在内存里全部删除
-func (m *Manager) Monitor3() {
-	for {
-		m.lock.RLock()
-		// 拷贝出一份agent列表
-		m.lock.RUnlock()
-		// 判断是否有Agent的心跳长时间无上报的，有的话再上写锁
-		// 将分配在具体Agent上的运行时在内存里删除
-		// 释放写锁
 	}
 }
