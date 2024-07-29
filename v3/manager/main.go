@@ -16,6 +16,7 @@ type PluginPod struct {
 }
 
 type PluginMetric struct {
+	instanceID string
 	pid        string
 	cpu        float64
 	memory     float64
@@ -39,20 +40,31 @@ type Agent struct {
 	runningPlugins []string
 	lastTimestamp  int
 }
+
+// todo 提供agent的copy方法
+
 type Task struct {
 	InstanceID string
 	Version    string
 	Action     string
+	Retry      int
 }
 
 type Manager struct {
-	lock      sync.RWMutex // 读写锁,todo 会不会有死锁问题
+	lock sync.RWMutex // 读写锁,todo 会不会有死锁问题
+	// 调度任务队列
 	taskQueue chan *Task
+	// agent队列锁
+	agentQueueRW sync.RWMutex
+	// agent队列
+	agentQueue map[string]chan *Task
 	// 通过注册/注销 + 心跳保活（超过驱逐）
 	agents sync.Map // map[string]*Agent // key agentID
-
+	// agent 预调度的Plugin数量
+	agentPreSchedulePluginsCount sync.Map // map[string]int // key agentID,val plugin count
+	// 插件运行时
 	pluginRuntimes sync.Map // map[string]*PluginPod // key instanceID + version
-
+	// 插件运行时metric
 	pluginMetrics sync.Map //map[string]*PluginMetric // key instanceID + version
 }
 
@@ -85,10 +97,11 @@ func (m *Manager) Report(agent Agent, items map[string]PluginReportItem) {
 		}
 		// 更新metric
 		if val, ok := m.pluginMetrics.LoadOrStore(item.instanceID, PluginMetric{
-			pid:     item.instanceID,
-			cpu:     item.cpu,
-			memory:  item.memory,
-			cpuTime: time.Now().Second(),
+			instanceID: item.instanceID,
+			pid:        item.instanceID,
+			cpu:        item.cpu,
+			memory:     item.memory,
+			cpuTime:    time.Now().Second(),
 		}); ok {
 			oldO := val.(PluginMetric)
 			newO := oldO
@@ -138,12 +151,17 @@ func (m *Manager) Schedule() {
 					if pod.runtimeStatus == "pending" {
 						continue
 					}
+					if pod.runtimeStatus == "pushed" {
+						continue
+					}
 				}
 				// 计算最合适的 agent（哪个插件少，就漂哪个）
 
 				// agent plugin 数量 + 1
 
 				// push to agent
+
+				// 失败推送至队列尾部
 			} else { //停止
 				m.pluginRuntimes.Delete(task.InstanceID)
 				// push to agent
