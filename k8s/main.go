@@ -15,7 +15,7 @@ import (
 
 func main() {
 	// Kubernetes API 地址
-	apiServer := "https://120.24.53.7:6443"
+	apiServer := "https://120.25.224.159:6443"
 	// 证书和密钥文件路径
 	certFile := filepath.Join("/Users/liyanfeng/go/src/code/platform/k8s/client.crt")
 	keyFile := filepath.Join("/Users/liyanfeng/go/src/code/platform/k8s/client.key")
@@ -67,7 +67,13 @@ func main() {
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "plugin-host-node-volume",
-									MountPath: "/data/plugin/",
+									MountPath: "/data/plugin/upload/GvY5xyKR/7T91t3pb/Gvmbef2y/1.2.106",
+									SubPath:   "upload/GvY5xyKR/7T91t3pb/Gvmbef2y/1.2.106",
+								},
+								{
+									Name:      "plugin-host-node-volume",
+									MountPath: "/data/plugin/runtime/2ef83637",
+									SubPath:   "runtime/2ef83637",
 								},
 							},
 							Command: []string{
@@ -78,6 +84,7 @@ func main() {
 								"--host_id=Host-nodejs1822881926256529409",
 								"--host_timeout_sec=30",
 								"--platform_address=tcp://ones-platform-api-service:9009",
+								"--plugin_path=/data/plugin/upload/GvY5xyKR/7T91t3pb/Gvmbef2y/1.2.106",
 							},
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
@@ -88,6 +95,44 @@ func main() {
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 80,
+									Name:          "http",
+									Protocol:      corev1.ProtocolTCP,
+								},
+							},
+						},
+						{
+							Name:            "afeng-plugin-standalonesvc",
+							Image:           "localhost:5000/ones/plugin-host-node:v6.0.36",
+							ImagePullPolicy: corev1.PullAlways,
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "plugin-host-node-volume",
+									MountPath: "/data/plugin/upload/GvY5xyKR/7T91t3pb/Gvmbef2y/1.2.106",
+									SubPath:   "upload/GvY5xyKR/7T91t3pb/Gvmbef2y/1.2.106",
+								},
+								{
+									Name:      "plugin-host-node-volume",
+									MountPath: "/data/plugin/6dU9NKJN",
+									SubPath:   "6dU9NKJN",
+								},
+							},
+							WorkingDir: "/data/plugin/upload/GvY5xyKR/7T91t3pb/Gvmbef2y/1.2.106/workspace",
+							Command: []string{
+								"/bin/bash",
+								"-c",
+							},
+							Args: []string{
+								"sh start.sh start --port=10000 --args= --mysql='plugin_built_in_gvmbef2y:sTCRPhUFMuJW1Re6@tcp(mysql-cluster-mysql-master:3306)/plugin_built_in_gvmbef2y?charset=utf8mb4&parseTime=True&loc=Local&multiStatements=true' --volume=/data/plugin/6dU9NKJN --secret=5Z2cN2VpT38PLVOn2aDyU92E8sqFAiDKXusoqq9kRGhGwjmWUU3uMd8qiGNwFe84 && echo 'Running some commands...' && sleep infinity",
+							},
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1"),
+									corev1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+							Ports: []corev1.ContainerPort{
+								{
+									ContainerPort: 10000,
 									Name:          "http",
 									Protocol:      corev1.ProtocolTCP,
 								},
